@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>YOLOv8 Helmet Detection Training — Troubleshooting Notes</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    max-width: 820px;
+    margin: 40px auto;
+    padding: 0 24px;
+    line-height: 1.6;
+    color: #1a1a1a;
+    background: #fafafa;
+  }
+  h1 {
+    font-size: 1.8em;
+    border-bottom: 3px solid #2563eb;
+    padding-bottom: 10px;
+  }
+  h2 {
+    font-size: 1.3em;
+    color: #1e40af;
+    margin-top: 2em;
+    border-left: 4px solid #2563eb;
+    padding-left: 10px;
+  }
+  .diagnosis {
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 20px 0;
+  }
+  .diagnosis strong { color: #c2410c; }
+  ol.steps li {
+    margin-bottom: 22px;
+  }
+  pre {
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 14px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.9em;
+  }
+  code {
+    background: #eef2ff;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  .note {
+    background: #eff6ff;
+    border-left: 4px solid #3b82f6;
+    padding: 10px 16px;
+    margin: 14px 0;
+    font-size: 0.95em;
+  }
+  .warn {
+    background: #fef2f2;
+    border-left: 4px solid #ef4444;
+    padding: 10px 16px;
+    margin: 14px 0;
+    font-size: 0.95em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px 12px;
+    text-align: left;
+  }
+  th { background: #f1f5f9; }
+</style>
+</head>
+<body>
+
+<h1>YOLOv8 Helmet Detection Training — Troubleshooting Notes</h1>
+
+<div class="diagnosis">
+  <strong>Root cause found:</strong> The laptop has only an <strong>Intel UHD Graphics 620</strong> (integrated, no CUDA support), and PyTorch installed is the <strong>CPU-only build (2.13.0+cpu)</strong>. Because CPU training is slow, the training runs for <code>helmet_train</code>, <code>helmet_train-2</code>, and <code>helmet_train-3</code> were interrupted (Ctrl+C) before completing even the first epoch — so no checkpoint (<code>last.pt</code>) was ever saved, leaving empty <code>weights/</code> folders and no <code>results.csv</code>.
+</div>
+
+<h2>Diagnostic Summary</h2>
+<table>
+  <tr><th>Check</th><th>Result</th></tr>
+  <tr><td>CUDA available</td><td>False</td></tr>
+  <tr><td>PyTorch version</td><td>2.13.0+cpu</td></tr>
+  <tr><td>GPU detected</td><td>Intel(R) UHD Graphics 620 (integrated, not CUDA-capable)</td></tr>
+  <tr><td>Folders found in runs/detect</td><td>helmet_train, helmet_train-2, helmet_train-3, helmet_train-4, helmet_train-5, helmet_train-6</td></tr>
+  <tr><td>helmet_train / -2 / -3 weights/</td><td>Empty — no last.pt or best.pt, no results.csv</td></tr>
+</table>
+
+<h2>Steps to Fix and Rerun Training</h2>
+<ol class="steps">
+
+<li>
+  <strong>Check your dataset size.</strong>
+  <p>Run this to see your data paths, then check how many images are in the train folder — more images means longer epochs on CPU, so this sets expectations before starting.</p>
+<pre>import yaml
+with open("D:/realtime-opencv-detection/helmet-dataset/data.yaml") as f:
+    print(yaml.safe_load(f))</pre>
+</li>
+
+<li>
+  <strong>Close other heavy programs.</strong>
+  <p>Since training runs entirely on CPU, close browser tabs, extra VS Code windows, or anything CPU-intensive so training gets as many resources as possible.</p>
+</li>
+
+<li>
+  <strong>Run the training script with CPU-friendly settings.</strong>
+  <p>Smaller image size and batch size, with the device explicitly set to CPU:</p>
+<pre>from ultralytics import YOLO
+
+model = YOLO("yolov8n.pt")
+
+results = model.train(
+    data="D:/realtime-opencv-detection/helmet-dataset/data.yaml",
+    epochs=30,
+    patience=10,
+    imgsz=416,
+    batch=8,
+    name="helmet_train",
+    exist_ok=True,
+    device="cpu"
+)</pre>
+</li>
+
+<li>
+  <strong>Let it run without interrupting.</strong>
+  <div class="warn">Watch for the progress bar showing <code>Epoch 1/30</code> with <code>box_loss</code>/<code>cls_loss</code> updating. Even if it moves slowly, that's normal — <strong>do not press Ctrl+C</strong>. This is exactly what caused the empty <code>weights/</code> folders before: training was stopped before the first checkpoint could save.</div>
+</li>
+
+<li>
+  <strong>Confirm the first checkpoint saved.</strong>
+  <p>Once epoch 0 finishes, check that a checkpoint now exists:</p>
+<pre>import os
+print(os.listdir(r"D:\realtime-opencv-detection\runs\detect\helmet_train\weights"))</pre>
+  <p>You should see <code>last.pt</code> (and later <code>best.pt</code>). Once this file exists, you're safe to stop and resume later if needed — no more lost progress.</p>
+</li>
+
+<li>
+  <strong>If you must stop early, resume instead of restarting.</strong>
+  <p>Once a checkpoint exists, resume from where you left off instead of retraining from scratch:</p>
+<pre>model = YOLO(r"D:/realtime-opencv-detection/runs/detect/helmet_train/weights/last.pt")
+results = model.train(resume=True)</pre>
+</li>
+
+<li>
+  <strong>Repeat for helmet_train-2 and helmet_train-3.</strong>
+  <p>Once <code>helmet_train</code> completes successfully and produces a <code>results.csv</code>, rerun the same training call with <code>name="helmet_train-2"</code>, then <code>name="helmet_train-3"</code> — adjusting whatever settings you intended to compare between runs.</p>
+</li>
+
+</ol>
+
+<h2>Extra Speed Tips for CPU-Only Training</h2>
+<div class="note">
+  <ul>
+    <li><strong>Lower <code>imgsz</code></strong> — 416 instead of 640 roughly halves compute cost per image.</li>
+    <li><strong>Reduce dataset size for a first test run</strong> — validate the pipeline on a small subset before committing to a full run.</li>
+    <li><strong>Use <code>yolov8n.pt</code></strong> (nano) — already the lightest YOLOv8 variant, good choice for CPU.</li>
+    <li><strong>Consider a cloud GPU</strong> (e.g., Google Colab's free GPU runtime) if local CPU training remains too slow for repeated experiments.</li>
+  </ul>
+</div>
+
+<h2>Plotting Results Once Training Completes</h2>
+<pre>import pandas as pd
+import matplotlib.pyplot as plt
+import os
+
+base = r"D:\realtime-opencv-detection\runs\detect"
+folders = ["helmet_train", "helmet_train-2", "helmet_train-3"]
+
+for folder in folders:
+    csv_path = os.path.join(base, folder, "results.csv")
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        df.columns = df.columns.str.strip()
+        plt.plot(df['epoch'], df['train/box_loss'], label=f'{folder} train_box_loss')
+        plt.plot(df['epoch'], df['val/box_loss'], label=f'{folder} val_box_loss')
+
+plt.legend()
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.show()</pre>
+
+</body>
+</html>
